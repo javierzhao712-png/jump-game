@@ -446,6 +446,8 @@ class Game {
     this.chargeTickTimer = 0;
     this.firstJumpDone = false;
     this.cameraTarget = new THREE.Vector3(0, 0, -2);
+    this.desiredTarget = new THREE.Vector3(0, 0, -2);
+    this.cameraDelay = 0;
 
     // Character
     this.character = createCharacter();
@@ -462,6 +464,8 @@ class Game {
 
     // Set camera
     this.updateCameraTarget();
+    this.cameraTarget.copy(this.desiredTarget);
+    this.cameraDelay = 0;
     camera.position.set(this.cameraTarget.x, 7, this.cameraTarget.z + 6);
     camera.lookAt(this.cameraTarget);
 
@@ -764,6 +768,8 @@ class Game {
     this.characterGroup.scale.set(1, 1, 1);
     this.characterGroup.rotation.set(0, 0, 0);
     this.updateCameraTarget();
+    this.cameraTarget.copy(this.desiredTarget);
+    this.cameraDelay = 0;
     camera.position.set(this.cameraTarget.x, 7, this.cameraTarget.z + 6);
     camera.lookAt(this.cameraTarget);
 
@@ -778,11 +784,12 @@ class Game {
     const current = this.platforms[this.currentIdx];
     const next = this.platforms[this.currentIdx + 1];
     if (current && next) {
-      this.cameraTarget.set(
+      this.desiredTarget.set(
         (current.x + next.x) / 2,
         0,
         (current.z + next.z) / 2 - 2
       );
+      this.cameraDelay = 250; // ms delay before camera starts chasing
     }
   }
 
@@ -798,13 +805,18 @@ class Game {
       sound.updateChargeSound(power);
     }
 
-    // Smooth camera
+    // Smooth camera: delay then chase
+    if (this.cameraDelay > 0) {
+      this.cameraDelay -= dt;
+    } else {
+      this.cameraTarget.lerp(this.desiredTarget, 0.04);
+    }
     const idealPos = new THREE.Vector3(
       this.cameraTarget.x,
       this.cameraTarget.y + 7.5,
       this.cameraTarget.z + 6
     );
-    camera.position.lerp(idealPos, CONFIG.CAMERA_LERP);
+    camera.position.lerp(idealPos, 0.08);
     camera.lookAt(this.cameraTarget);
   }
 
