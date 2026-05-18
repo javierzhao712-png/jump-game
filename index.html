@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>跳一跳</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #d4c5b9; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+
+  #game-container {
+    position: fixed; inset: 0;
+    touch-action: none;
+  }
+  #game-container canvas { display: block; }
+
+  #score {
+    position: fixed; top: 30px; left: 0; right: 0; text-align: center;
+    font-size: 48px; font-weight: 700; color: #fff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    pointer-events: none; z-index: 10;
+  }
+
+  #instructions {
+    position: fixed; bottom: 160px; left: 0; right: 0; text-align: center;
+    font-size: 16px; color: rgba(255,255,255,0.8);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    pointer-events: none; z-index: 10;
+    transition: opacity 0.5s;
+  }
+  #instructions.fade { opacity: 0; }
+
+
+
+  #game-over {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); z-index: 100;
+    flex-direction: column; gap: 16px;
+  }
+  #game-over.show { display: flex; }
+  #game-over h1 { font-size: 42px; color: #fff; }
+  #game-over .final-score { font-size: 24px; color: rgba(255,255,255,0.9); }
+  #game-over .best-score { font-size: 16px; color: rgba(255,255,255,0.7); margin-bottom: 8px; }
+  #game-over button {
+    padding: 14px 48px; font-size: 20px; border: none; border-radius: 30px;
+    background: #fff; color: #333; cursor: pointer; font-weight: 600;
+    letter-spacing: 2px;
+  }
+  #game-over button:active { transform: scale(0.96); }
+
+  #perfect {
+    position: fixed; top: 40%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 36px; font-weight: 700; color: #facc15;
+    text-shadow: 0 0 12px rgba(250,204,21,0.6);
+    pointer-events: none; z-index: 20;
+    opacity: 0;
+  }
+  #perfect.pop {
+    animation: perfectAnim 0.8s ease-out forwards;
+  }
+  @keyframes perfectAnim {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(0.5); }
+    40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+    100% { opacity: 0; transform: translate(-50%, -90%) scale(1); }
+  }
+</style>
+</head>
+<body>
+
+<div id="game-container"></div>
+<div id="score">0</div>
+<div id="instructions">按住蓄力，松开跳跃</div>
+<div id="perfect"></div>
+<div id="game-over">
+  <h1>游戏结束</h1>
+  <div class="final-score" id="final-score">得分: 0</div>
+  <div class="best-score" id="best-score">最高分: 0</div>
+  <button id="restart-btn">再来一次</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ─── DOM ──────────────────────────────────────────
+const container = document.getElementById('game-container');
+const scoreEl = document.getElementById('score');
+const instructionsEl = document.getElementById('instructions');
+const perfectEl = document.getElementById('perfect');
+const gameOverEl = document.getElementById('game-over');
+const finalScoreEl = document.getElementById('final-score');
+const bestScoreEl = document.getElementById('best-score');
+const restartBtn = document.getElementById('restart-btn');
+
+// ─── CONFIG ───────────────────────────────────────
+const CONFIG = {
+  MAX_CHARGE_MS: 2000,
+  MAX_JUMP_DIST: 6,
+  JUMP_DURATION: 600,
+  ARC_HEIGHT: 2.5,
+  GAP_MIN: 1.5,
+  GAP_MAX: 3.5,
+  PLATFORM_SIZE_MIN: 0.8,
+  PLATFORM_SIZE_MAX: 1.6,
+  PLATFORM_HEIGHT: 0.25,
+  ANGLE_BASE_DEG: 50,
+  ANGLE_VARIATION_DEG: 15,
+  PERFECT_RATIO: 0.22,
+  CHARGE_TICK_BASE: 180,
+  CAMERA_LERP: 0.06,
+};
+
+// ─── THREE.JS SETUP ───────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xd4c5b9);
+scene.fog = new THREE.Fog(0xd4c5b9, 15, 40);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 60);
+camera.position.set(0, 7, 6);
+camera.lookAt(0, 0, -2);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(5, 12, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 0.5;
+sun.shadow.camera.far = 50;
+sun.shadow.camera.left = -10;
+sun.shadow.camera.right = 10;
+sun.shadow.camera.top = 10;
+sun.shadow.camera.bottom = -10;
+scene.add(sun);
+const fillLight = new THREE.DirectionalLight(0xffeedd, 0.4);
+fillLight.position.set(-3, 3, -2);
+scene.add(fillLight);
+
+// Platform color palette
+const PLATFORM_COLORS = [
+  0x5a7d9a, 0x6b8e6b, 0xc4885a, 0x8e6b8e, 0xc45a5a,
+  0x5a9a8e, 0x8e8e5a, 0x9a6b5a, 0x5a6b9a, 0x7d9a5a,
+];
+
+// ─── SOUND MANAGER ────────────────────────────────
+class SoundManager {
+  constructor() {
+    this.ctx = null;
+    this.initialized = false;
+  }
+
+  init() {
+    if (this.initialized) return;
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.initialized = true;
+    } catch (e) {
+      console.warn('Audio not available');
+    }
+  }
+
+  _play(type, freq, endFreq, duration, waveType = 'sine', vol = 0.12) {
+    if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = waveType;
+    osc.frequency.setValueAtTime(freq, t);
+    if (endFreq !== freq) osc.frequency.linearRampToValueAtTime(endFreq, t + duration);
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + duration + 0.02);
+  }
+
+  chargeTick(power) {
+    const freq = 600 - power * 200;
+    this._play('tick', freq, freq - 80, 0.05, 'sine', 0.06);
+  }
+
+  jump() { this._play('jump', 300, 800, 0.15, 'sine', 0.1); }
+  land() { this._play('land', 120, 60, 0.12, 'triangle', 0.15); }
+  perfect() {
+    if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    const t = this.ctx.currentTime;
+    [880, 1320].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, t + i * 0.06);
+      gain.gain.setValueAtTime(0.1, t + i * 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.06 + 0.2);
+      osc.connect(gain).connect(this.ctx.destination);
+      osc.start(t + i * 0.06);
+      osc.stop(t + i * 0.06 + 0.22);
+    });
+  }
+  gameOver() { this._play('over', 500, 80, 0.6, 'sawtooth', 0.1); }
+}
+
+const sound = new SoundManager();
+
+// ─── PLATFORM ─────────────────────────────────────
+class Platform {
+  constructor(x, z, size) {
+    this.size = size;
+    this.x = x;
+    this.z = z;
+    this.y = 0;
+    this.halfH = CONFIG.PLATFORM_HEIGHT / 2;
+    this.color = PLATFORM_COLORS[Math.floor(Math.random() * PLATFORM_COLORS.length)];
+
+    const geo = new THREE.BoxGeometry(size, CONFIG.PLATFORM_HEIGHT, size);
+    const mat = new THREE.MeshStandardMaterial({ color: this.color, roughness: 0.5, metalness: 0.05 });
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.position.set(x, this.y, z);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+
+    // subtle top highlight edge
+    const edgeGeo = new THREE.BoxGeometry(size - 0.04, 0.02, size - 0.04);
+    const edgeMat = new THREE.MeshStandardMaterial({ color: this.color, roughness: 0.3, metalness: 0.1, emissive: this.color, emissiveIntensity: 0.15 });
+    this.topEdge = new THREE.Mesh(edgeGeo, edgeMat);
+    this.topEdge.position.set(x, this.halfH + 0.01, z);
+  }
+
+  addToScene(scene) {
+    scene.add(this.mesh);
+    scene.add(this.topEdge);
+  }
+
+  removeFromScene(scene) {
+    scene.remove(this.mesh);
+    scene.remove(this.topEdge);
+  }
+
+  get topY() { return this.y + this.halfH; }
+
+  contains(x, z) {
+    const hs = this.size / 2;
+    return Math.abs(x - this.x) < hs && Math.abs(z - this.z) < hs;
+  }
+
+  distFromCenter(x, z) {
+    return Math.sqrt((x - this.x) ** 2 + (z - this.z) ** 2);
+  }
+}
+
+// ─── CHARACTER MODEL ──────────────────────────────
+function createCharacter() {
+  const group = new THREE.Group();
+
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xffd5b4, roughness: 0.6 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4a90d9, roughness: 0.4 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2c3e50, roughness: 0.5 });
+  const blackMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: 0x2c1810, roughness: 0.5 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e, roughness: 0.5 });
+
+  // Legs
+  const legGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.22, 8);
+  const leftLeg = new THREE.Mesh(legGeo, shoeMat);
+  leftLeg.position.set(-0.07, 0.11, 0);
+  const rightLeg = new THREE.Mesh(legGeo, shoeMat);
+  rightLeg.position.set(0.07, 0.11, 0);
+  group.add(leftLeg, rightLeg);
+
+  // Body
+  const bodyGeo = new THREE.CylinderGeometry(0.13, 0.15, 0.32, 8);
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.35;
+  group.add(body);
+
+  // Arms
+  const armGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.24, 8);
+  const leftArm = new THREE.Mesh(armGeo, bodyMat);
+  leftArm.position.set(-0.18, 0.42, 0);
+  leftArm.rotation.z = 0.4;
+  const rightArm = new THREE.Mesh(armGeo, bodyMat);
+  rightArm.position.set(0.18, 0.42, 0);
+  rightArm.rotation.z = -0.4;
+  group.add(leftArm, rightArm);
+
+  // Head
+  const headGeo = new THREE.SphereGeometry(0.17, 16, 16);
+  const head = new THREE.Mesh(headGeo, skinMat);
+  head.position.y = 0.64;
+  group.add(head);
+
+  // Hair
+  const hairGeo = new THREE.SphereGeometry(0.175, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+  const hair = new THREE.Mesh(hairGeo, hairMat);
+  hair.position.y = 0.66;
+  group.add(hair);
+
+  // Eyes
+  const eyeGeo = new THREE.SphereGeometry(0.035, 8, 8);
+  const leftEye = new THREE.Mesh(eyeGeo, blackMat);
+  leftEye.position.set(-0.055, 0.68, 0.14);
+  const rightEye = new THREE.Mesh(eyeGeo, blackMat);
+  rightEye.position.set(0.055, 0.68, 0.14);
+  group.add(leftEye, rightEye);
+
+  // Mouth (small arc hint)
+  const mouthGeo = new THREE.TorusGeometry(0.04, 0.012, 6, 8, Math.PI);
+  const mouth = new THREE.Mesh(mouthGeo, new THREE.MeshStandardMaterial({ color: 0xcc6644, roughness: 0.5 }));
+  mouth.position.set(0, 0.61, 0.155);
+  mouth.rotation.x = -0.2;
+  group.add(mouth);
+
+  // Drop shadow disc
+  const shadowGeo = new THREE.CircleGeometry(0.18, 16);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false });
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.005;
+  shadow.name = 'shadow';
+  group.add(shadow);
+
+  group.castShadow = true;
+  return group;
+}
+
+// ─── GAME STATE ───────────────────────────────────
+const State = { IDLE: 'idle', CHARGING: 'charging', JUMPING: 'jumping', GAMEOVER: 'gameover' };
+
+class Game {
+  constructor() {
+    this.state = State.IDLE;
+    this.score = 0;
+    this.combo = 0;
+    this.bestScore = parseInt(localStorage.getItem('jump_best') || '0', 10);
+    this.platforms = [];
+    this.currentIdx = 0;
+    this.chargeStart = 0;
+    this.chargeTickTimer = 0;
+    this.firstJumpDone = false;
+    this.cameraTarget = new THREE.Vector3(0, 0, -2);
+
+    // Character
+    this.character = createCharacter();
+    this.characterGroup = this.character;
+    scene.add(this.characterGroup);
+
+    // Generate initial platforms
+    this.generateInitialPlatforms();
+
+    // Place character on first platform
+    const p0 = this.platforms[0];
+    this.characterGroup.position.set(p0.x, p0.topY, p0.z);
+    this.characterGroup.scale.set(1, 1, 1);
+
+    // Set camera
+    this.updateCameraTarget();
+    camera.position.set(this.cameraTarget.x, 7, this.cameraTarget.z + 6);
+    camera.lookAt(this.cameraTarget);
+
+    // Render once
+    this.render();
+  }
+
+  generateInitialPlatforms() {
+    // First platform at origin
+    const p0 = new Platform(0, 0, 1.2);
+    this.platforms.push(p0);
+    p0.addToScene(scene);
+
+    // Generate next two
+    this.generateNextPlatform();
+    this.generateNextPlatform();
+  }
+
+  generateNextPlatform() {
+    const last = this.platforms[this.platforms.length - 1];
+    const i = this.platforms.length;
+    const isRight = i % 2 === 1;
+    const angleDeg = CONFIG.ANGLE_BASE_DEG + (Math.random() - 0.5) * 2 * CONFIG.ANGLE_VARIATION_DEG;
+    const angle = THREE.MathUtils.degToRad(angleDeg);
+    const gap = CONFIG.GAP_MIN + Math.random() * (CONFIG.GAP_MAX - CONFIG.GAP_MIN);
+    const size = CONFIG.PLATFORM_SIZE_MIN + Math.random() * (CONFIG.PLATFORM_SIZE_MAX - CONFIG.PLATFORM_SIZE_MIN);
+
+    const dirX = isRight ? Math.sin(angle) : -Math.sin(angle);
+    const dirZ = -Math.cos(angle);
+
+    const x = last.x + dirX * gap;
+    const z = last.z + dirZ * gap;
+
+    const p = new Platform(x, z, size);
+    this.platforms.push(p);
+    p.addToScene(scene);
+  }
+
+  startCharge() {
+    if (this.state !== State.IDLE) return;
+    sound.init();
+    this.state = State.CHARGING;
+    this.chargeStart = performance.now();
+    this.chargeTickTimer = 0;
+  }
+
+  releaseCharge() {
+    if (this.state !== State.CHARGING) return;
+    const elapsed = performance.now() - this.chargeStart;
+    const power = Math.min(elapsed / CONFIG.MAX_CHARGE_MS, 1);
+    this.state = State.JUMPING;
+
+    // Spring release: stretch → bounce → settle, then jump
+    const springDuration = 180; // ms
+    const springStart = performance.now();
+    const squashedY = 1 - power * 0.3; // current squashed scale
+
+    const animateSpring = (now) => {
+      const t = Math.min((now - springStart) / springDuration, 1);
+      // Quick stretch up, then damped oscillation settle
+      const finalS = t < 0.15
+        ? squashedY + (1.35 - squashedY) * (t / 0.15)
+        : 1 + 0.2 * Math.sin((t - 0.15) * Math.PI * 2.5) * Math.exp(-(t - 0.15) * 8);
+      this.characterGroup.scale.set(1, finalS, 1);
+      if (t < 1) {
+        requestAnimationFrame(animateSpring);
+      } else {
+        this.characterGroup.scale.set(1, 1, 1);
+        this.doJump(power);
+      }
+    };
+    requestAnimationFrame(animateSpring);
+  }
+
+  doJump(power) {
+    const current = this.platforms[this.currentIdx];
+    const next = this.platforms[this.currentIdx + 1];
+    if (!next) return;
+
+    // Calculate direction
+    const dx = next.x - current.x;
+    const dz = next.z - current.z;
+    const gap = Math.sqrt(dx * dx + dz * dz);
+    const dirX = dx / gap;
+    const dirZ = dz / gap;
+
+    const dist = power * CONFIG.MAX_JUMP_DIST;
+    const landX = current.x + dirX * dist;
+    const landZ = current.z + dirZ * dist;
+
+    const startPos = this.characterGroup.position.clone();
+    const startY = startPos.y;
+
+    sound.jump();
+
+    const startTime = performance.now();
+    const jumpDuration = CONFIG.JUMP_DURATION;
+
+    const animate = (now) => {
+      const tRaw = (now - startTime) / jumpDuration;
+      const t = Math.min(tRaw, 1);
+      // ease-in-out
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+      this.characterGroup.position.x = startPos.x + (landX - startPos.x) * ease;
+      this.characterGroup.position.z = startPos.z + (landZ - startPos.z) * ease;
+      this.characterGroup.position.y = startY + CONFIG.ARC_HEIGHT * Math.sin(t * Math.PI);
+      this.characterGroup.rotation.y += 0.15;
+
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        this.characterGroup.rotation.y = Math.round(this.characterGroup.rotation.y / (Math.PI * 2)) * Math.PI * 2;
+        this.onLand(landX, landZ, next);
+      }
+    };
+
+    requestAnimationFrame(animate);
+  }
+
+  onLand(x, z, nextPlatform) {
+    const current = this.platforms[this.currentIdx];
+
+    // Check if landed on the NEXT platform
+    if (nextPlatform.contains(x, z)) {
+      sound.land();
+      this.characterGroup.position.set(x, nextPlatform.topY, z);
+
+      const dist = nextPlatform.distFromCenter(x, z);
+      const perfectThreshold = nextPlatform.size * CONFIG.PERFECT_RATIO;
+
+      if (dist < perfectThreshold) {
+        this.combo++;
+        const points = Math.pow(2, this.combo);
+        this.score += points;
+        sound.perfect();
+        this.characterGroup.position.set(nextPlatform.x, nextPlatform.topY, nextPlatform.z);
+        this.showPerfect(this.combo, points);
+      } else {
+        this.combo = 0;
+        this.score += 1;
+      }
+
+      this.updateScore();
+      this.currentIdx++;
+
+      if (this.currentIdx >= 2) {
+        const old = this.platforms[this.currentIdx - 2];
+        this.animatePlatformFall(old);
+      }
+
+      const ahead = this.currentIdx + 2;
+      while (this.platforms.length <= ahead) {
+        this.generateNextPlatform();
+      }
+
+      this.updateCameraTarget();
+
+      if (!this.firstJumpDone) {
+        this.firstJumpDone = true;
+        instructionsEl.classList.add('fade');
+      }
+
+      this.animatePlatformSettle(nextPlatform);
+      this.state = State.IDLE;
+
+    // Check if landed back on the CURRENT platform (undershoot)
+    } else if (current.contains(x, z)) {
+      sound.land();
+      this.characterGroup.position.set(x, current.topY, z);
+      this.combo = 0;
+      this.state = State.IDLE;
+
+    // Missed everything
+    } else {
+      this.gameOver(x, z, nextPlatform);
+    }
+  }
+
+  animatePlatformFall(platform) {
+    const start = performance.now();
+    const duration = 500;
+    const startY = platform.y;
+    const animate = (now) => {
+      const t = Math.min((now - start) / duration, 1);
+      platform.mesh.position.y = startY - t * t * 4;
+      platform.topEdge.position.y = platform.mesh.position.y + platform.halfH + 0.01;
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        platform.removeFromScene(scene);
+      }
+    };
+    requestAnimationFrame(animate);
+  }
+
+  animatePlatformSettle(platform) {
+    const start = performance.now();
+    const duration = 250;
+    const origY = platform.y;
+    const animate = (now) => {
+      const t = Math.min((now - start) / duration, 1);
+      // quick squash: down then up
+      const s = 1 - 0.08 * Math.sin(t * Math.PI * 2) * (1 - t);
+      platform.mesh.scale.y = s;
+      platform.mesh.position.y = origY - (1 - s) * platform.halfH;
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        platform.mesh.scale.y = 1;
+        platform.mesh.position.y = origY;
+      }
+    };
+    requestAnimationFrame(animate);
+  }
+
+  gameOver(landX, landZ, targetPlatform) {
+    this.state = State.GAMEOVER;
+    sound.gameOver();
+
+    // Determine fall direction: off nearest edge
+    const dx = landX - targetPlatform.x;
+    const dz = landZ - targetPlatform.z;
+    const hs = targetPlatform.size / 2;
+    const overlapX = hs - Math.abs(dx);
+    const overlapZ = hs - Math.abs(dz);
+    let fallDirX = 0, fallDirZ = 0;
+    if (overlapX < overlapZ) {
+      fallDirX = dx > 0 ? 1 : -1;
+    } else {
+      fallDirZ = dz > 0 ? 1 : -1;
+    }
+
+    const start = performance.now();
+    const duration = 800;
+    const startPos = this.characterGroup.position.clone();
+    const startScale = this.characterGroup.scale.clone();
+    const animate = (now) => {
+      const t = Math.min((now - start) / duration, 1);
+      const ease = t * t;
+      this.characterGroup.position.x = startPos.x + fallDirX * ease * 2;
+      this.characterGroup.position.z = startPos.z + fallDirZ * ease * 2;
+      this.characterGroup.position.y = startPos.y - ease * ease * 8;
+      this.characterGroup.rotation.x += 0.08;
+      this.characterGroup.rotation.z += fallDirX * 0.06;
+      this.characterGroup.scale.setScalar(1 - t * 0.3);
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // Show game over UI
+        this.showGameOver();
+      }
+    };
+    requestAnimationFrame(animate);
+  }
+
+  showPerfect(combo, points) {
+    perfectEl.textContent = combo > 1 ? `完美 x${combo}! +${points}` : `完美! +${points}`;
+    perfectEl.classList.remove('pop');
+    void perfectEl.offsetWidth;
+    perfectEl.classList.add('pop');
+  }
+
+  updateScore() {
+    scoreEl.textContent = this.score;
+  }
+
+  showGameOver() {
+    if (this.score > this.bestScore) {
+      this.bestScore = this.score;
+      localStorage.setItem('jump_best', this.bestScore);
+    }
+    finalScoreEl.textContent = `得分: ${this.score}`;
+    bestScoreEl.textContent = `最高分: ${this.bestScore}`;
+    gameOverEl.classList.add('show');
+    scoreEl.style.display = 'none';
+  }
+
+  restart() {
+    // Remove old platforms
+    for (const p of this.platforms) {
+      p.removeFromScene(scene);
+    }
+    this.platforms = [];
+    this.currentIdx = 0;
+    this.score = 0;
+    this.combo = 0;
+    this.state = State.IDLE;
+    this.firstJumpDone = false;
+
+    // Rebuild
+    this.generateInitialPlatforms();
+    const p0 = this.platforms[0];
+    this.characterGroup.position.set(p0.x, p0.topY, p0.z);
+    this.characterGroup.scale.set(1, 1, 1);
+    this.characterGroup.rotation.set(0, 0, 0);
+    this.updateCameraTarget();
+    camera.position.set(this.cameraTarget.x, 7, this.cameraTarget.z + 6);
+    camera.lookAt(this.cameraTarget);
+
+    // UI
+    gameOverEl.classList.remove('show');
+    scoreEl.style.display = '';
+    scoreEl.textContent = '0';
+    instructionsEl.classList.remove('fade');
+  }
+
+  updateCameraTarget() {
+    const current = this.platforms[this.currentIdx];
+    const next = this.platforms[this.currentIdx + 1];
+    if (current && next) {
+      this.cameraTarget.set(
+        (current.x + next.x) / 2,
+        0,
+        (current.z + next.z) / 2 - 2
+      );
+    }
+  }
+
+  update(dt) {
+    if (this.state === State.CHARGING) {
+      const elapsed = performance.now() - this.chargeStart;
+      const power = Math.min(elapsed / CONFIG.MAX_CHARGE_MS, 1);
+
+      // Character squash
+      this.characterGroup.scale.set(1, 1 - power * 0.3, 1);
+      const current = this.platforms[this.currentIdx];
+      this.characterGroup.position.y = current.topY;
+    }
+
+    // Smooth camera
+    const idealPos = new THREE.Vector3(
+      this.cameraTarget.x,
+      this.cameraTarget.y + 7.5,
+      this.cameraTarget.z + 6
+    );
+    camera.position.lerp(idealPos, CONFIG.CAMERA_LERP);
+    camera.lookAt(this.cameraTarget);
+  }
+
+  render() {
+    renderer.render(scene, camera);
+  }
+}
+
+// ─── INIT ─────────────────────────────────────────
+const game = new Game();
+
+// ─── INPUT ────────────────────────────────────────
+container.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  game.startCharge();
+});
+container.addEventListener('pointerup', (e) => {
+  e.preventDefault();
+  game.releaseCharge();
+});
+container.addEventListener('pointerleave', (e) => {
+  if (game.state === State.CHARGING) game.releaseCharge();
+});
+// Prevent context menu on long press
+container.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Restart
+restartBtn.addEventListener('click', () => game.restart());
+restartBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+// ─── RESIZE ───────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── GAME LOOP ────────────────────────────────────
+let lastTime = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  if (game.state !== State.GAMEOVER) {
+    game.update(dt * 1000);
+  }
+  game.render();
+}
+
+requestAnimationFrame(loop);
+
+// ─── KEYBOARD: Space to restart ───────────────────
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && game.state === State.GAMEOVER) {
+    e.preventDefault();
+    game.restart();
+  }
+});
+</script>
+</body>
+</html>
