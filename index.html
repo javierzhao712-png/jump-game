@@ -563,6 +563,7 @@ class Game {
     const startY = startPos.y;
 
     sound.jump();
+    this.cameraDelay = 0; // start tracking immediately
 
     const startTime = performance.now();
     const jumpDuration = CONFIG.JUMP_DURATION;
@@ -570,13 +571,18 @@ class Game {
     const animate = (now) => {
       const tRaw = (now - startTime) / jumpDuration;
       const t = Math.min(tRaw, 1);
-      // ease-in-out
       const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 
-      this.characterGroup.position.x = startPos.x + (landX - startPos.x) * ease;
-      this.characterGroup.position.z = startPos.z + (landZ - startPos.z) * ease;
+      const curX = startPos.x + (landX - startPos.x) * ease;
+      const curZ = startPos.z + (landZ - startPos.z) * ease;
+      this.characterGroup.position.x = curX;
+      this.characterGroup.position.z = curZ;
       this.characterGroup.position.y = startY + CONFIG.ARC_HEIGHT * Math.sin(t * Math.PI);
       this.characterGroup.rotation.y += 0.15;
+
+      // Camera follows character during jump
+      this.desiredTarget.x += (curX - this.desiredTarget.x) * 0.25;
+      this.desiredTarget.z += (curZ - this.desiredTarget.z) * 0.25;
 
       if (t < 1) {
         requestAnimationFrame(animate);
@@ -789,7 +795,7 @@ class Game {
         0,
         (current.z + next.z) / 2 - 2
       );
-      this.cameraDelay = 250; // ms delay before camera starts chasing
+      this.cameraDelay = 0; // camera is already near from jump tracking
     }
   }
 
