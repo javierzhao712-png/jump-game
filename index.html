@@ -161,6 +161,10 @@ class SoundManager {
   constructor() {
     this.ctx = null;
     this.initialized = false;
+    this.bgmNodes = null;
+    this.chargeOsc = null;
+    this.chargeGain = null;
+    this.bgmGain = null;
   }
 
   init() {
@@ -187,6 +191,95 @@ class SoundManager {
     osc.connect(gain).connect(this.ctx.destination);
     osc.start(t);
     osc.stop(t + duration + 0.02);
+  }
+
+  startBGM() {
+    if (!this.ctx || this.bgmNodes) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    const t = this.ctx.currentTime;
+
+    this.bgmGain = this.ctx.createGain();
+    this.bgmGain.gain.setValueAtTime(0, t);
+    this.bgmGain.gain.linearRampToValueAtTime(0.04, t + 0.5);
+    this.bgmGain.connect(this.ctx.destination);
+
+    // Pentatonic scale: C4 D4 E4 G4 A4 C5
+    const notes = [262, 294, 330, 392, 440, 523];
+    const beatLen = 0.9; // seconds per note
+
+    const melody = (startTime, noteIdx) => {
+      const osc = this.ctx.createOscillator();
+      const noteGain = this.ctx.createGain();
+      osc.type = 'sine';
+      const freq = notes[noteIdx % notes.length];
+      osc.frequency.setValueAtTime(freq, startTime);
+      noteGain.gain.setValueAtTime(0, startTime);
+      noteGain.gain.linearRampToValueAtTime(0.12, startTime + 0.03);
+      noteGain.gain.linearRampToValueAtTime(0.06, startTime + beatLen * 0.7);
+      noteGain.gain.linearRampToValueAtTime(0, startTime + beatLen);
+      osc.connect(noteGain).connect(this.bgmGain);
+      osc.start(startTime);
+      osc.stop(startTime + beatLen + 0.02);
+    };
+
+    const scheduleLoop = () => {
+      if (!this.bgmNodes) return;
+      const now = this.ctx.currentTime;
+      const scheduleAhead = 4; // schedule 4 seconds ahead
+      const startIdx = Math.floor((now - t) / beatLen);
+      for (let i = 0; i < Math.ceil(scheduleAhead / beatLen) + 1; i++) {
+        const idx = startIdx + i;
+        if (idx < 0) continue;
+        const noteTime = t + idx * beatLen;
+        if (noteTime > now + scheduleAhead) break;
+        if (noteTime < now - 0.1) continue;
+        melody(noteTime, idx);
+      }
+      this._bgmTimer = setTimeout(scheduleLoop, 2000);
+    };
+
+    this.bgmNodes = { t };
+    scheduleLoop();
+  }
+
+  stopBGM() {
+    if (!this.bgmNodes || !this.bgmGain) return;
+    clearTimeout(this._bgmTimer);
+    const t = this.ctx.currentTime;
+    this.bgmGain.gain.linearRampToValueAtTime(0, t + 0.3);
+    this.bgmNodes = null;
+  }
+
+  startChargeSound() {
+    if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.chargeOsc) return;
+    const t = this.ctx.currentTime;
+    this.chargeOsc = this.ctx.createOscillator();
+    this.chargeGain = this.ctx.createGain();
+    this.chargeOsc.type = 'sine';
+    this.chargeOsc.frequency.setValueAtTime(180, t);
+    this.chargeGain.gain.setValueAtTime(0, t);
+    this.chargeGain.gain.linearRampToValueAtTime(0.05, t + 0.05);
+    this.chargeOsc.connect(this.chargeGain).connect(this.ctx.destination);
+    this.chargeOsc.start(t);
+  }
+
+  updateChargeSound(power) {
+    if (!this.chargeOsc || !this.chargeGain) return;
+    const t = this.ctx.currentTime;
+    const freq = 180 + power * 420;
+    this.chargeOsc.frequency.linearRampToValueAtTime(freq, t + 0.05);
+    this.chargeGain.gain.linearRampToValueAtTime(0.04 + power * 0.04, t + 0.05);
+  }
+
+  stopChargeSound() {
+    if (!this.chargeOsc) return;
+    const t = this.ctx.currentTime;
+    this.chargeGain.gain.linearRampToValueAtTime(0, t + 0.06);
+    this.chargeOsc.stop(t + 0.08);
+    this.chargeOsc = null;
+    this.chargeGain = null;
   }
 
   chargeTick(power) {
@@ -410,9 +503,11 @@ class Game {
   startCharge() {
     if (this.state !== State.IDLE) return;
     sound.init();
+    sound.startBGM();
     this.state = State.CHARGING;
     this.chargeStart = performance.now();
     this.chargeTickTimer = 0;
+    sound.startChargeSound();
   }
 
   releaseCharge() {
@@ -420,6 +515,7 @@ class Game {
     const elapsed = performance.now() - this.chargeStart;
     const power = Math.min(elapsed / CONFIG.MAX_CHARGE_MS, 1);
     this.state = State.JUMPING;
+    sound.stopChargeSound();
 
     // Spring release: stretch → bounce → settle, then jump
     const springDuration = 180; // ms
@@ -587,7 +683,9 @@ class Game {
 
   gameOver(landX, landZ, targetPlatform) {
     this.state = State.GAMEOVER;
+    sound.stopChargeSound();
     sound.gameOver();
+    sound.stopBGM();
 
     // Determine fall direction: off nearest edge
     const dx = landX - targetPlatform.x;
@@ -697,6 +795,7 @@ class Game {
       this.characterGroup.scale.set(1, 1 - power * 0.3, 1);
       const current = this.platforms[this.currentIdx];
       this.characterGroup.position.y = current.topY;
+      sound.updateChargeSound(power);
     }
 
     // Smooth camera
