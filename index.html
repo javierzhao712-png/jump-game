@@ -600,7 +600,6 @@ class Game {
 
     sound.jump();
     sound.startAirborne();
-    this.cameraDelay = 0;
 
     const startTime = performance.now();
     const jumpDuration = CONFIG.JUMP_DURATION;
@@ -616,10 +615,6 @@ class Game {
       this.characterGroup.position.z = curZ;
       this.characterGroup.position.y = startY + CONFIG.ARC_HEIGHT * Math.sin(t * Math.PI);
       this.characterGroup.rotation.y += 0.15;
-
-      // Camera follows character during jump
-      this.desiredTarget.x += (curX - this.desiredTarget.x) * 0.25;
-      this.desiredTarget.z += (curZ - this.desiredTarget.z) * 0.25;
 
       if (t < 1) {
         requestAnimationFrame(animate);
@@ -835,7 +830,7 @@ class Game {
         0,
         (current.z + next.z) / 2 - 2
       );
-      this.cameraDelay = 0; // camera is already near from jump tracking
+      this.cameraDelay = 200; // short pause then smooth pan
     }
   }
 
