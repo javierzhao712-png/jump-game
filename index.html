@@ -165,6 +165,9 @@ class SoundManager {
     this.chargeOsc = null;
     this.chargeGain = null;
     this.bgmGain = null;
+    this.airOsc = null;
+    this.airGain = null;
+    this.airMod = null;
   }
 
   init() {
@@ -285,6 +288,39 @@ class SoundManager {
   chargeTick(power) {
     const freq = 600 - power * 200;
     this._play('tick', freq, freq - 80, 0.05, 'sine', 0.06);
+  }
+
+  startAirborne() {
+    if (!this.ctx || this.airOsc) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    const t = this.ctx.currentTime;
+    // Wind whoosh: a low triangle wave with frequency wobble
+    this.airOsc = this.ctx.createOscillator();
+    this.airGain = this.ctx.createGain();
+    this.airMod = this.ctx.createOscillator();
+    const airModGain = this.ctx.createGain();
+    this.airMod.type = 'sine';
+    this.airMod.frequency.setValueAtTime(3, t);
+    airModGain.gain.setValueAtTime(80, t);
+    this.airMod.connect(airModGain).connect(this.airOsc.frequency);
+    this.airOsc.type = 'triangle';
+    this.airOsc.frequency.setValueAtTime(280, t);
+    this.airGain.gain.setValueAtTime(0, t);
+    this.airGain.gain.linearRampToValueAtTime(0.06, t + 0.08);
+    this.airOsc.connect(this.airGain).connect(this.ctx.destination);
+    this.airOsc.start(t);
+    this.airMod.start(t);
+  }
+
+  stopAirborne() {
+    if (!this.airOsc) return;
+    const t = this.ctx.currentTime;
+    this.airGain.gain.linearRampToValueAtTime(0, t + 0.1);
+    this.airOsc.stop(t + 0.12);
+    this.airMod.stop(t + 0.12);
+    this.airOsc = null;
+    this.airGain = null;
+    this.airMod = null;
   }
 
   jump() { this._play('jump', 300, 800, 0.15, 'sine', 0.1); }
@@ -563,7 +599,8 @@ class Game {
     const startY = startPos.y;
 
     sound.jump();
-    this.cameraDelay = 0; // start tracking immediately
+    sound.startAirborne();
+    this.cameraDelay = 0;
 
     const startTime = performance.now();
     const jumpDuration = CONFIG.JUMP_DURATION;
@@ -600,6 +637,7 @@ class Game {
 
     // Check if landed on the NEXT platform
     if (nextPlatform.contains(x, z)) {
+      sound.stopAirborne();
       sound.land();
       this.characterGroup.position.set(x, nextPlatform.topY, z);
 
@@ -643,6 +681,7 @@ class Game {
 
     // Check if landed back on the CURRENT platform (undershoot)
     } else if (current.contains(x, z)) {
+      sound.stopAirborne();
       sound.land();
       this.characterGroup.position.set(x, current.topY, z);
       this.combo = 0;
@@ -694,6 +733,7 @@ class Game {
   gameOver(landX, landZ, targetPlatform) {
     this.state = State.GAMEOVER;
     sound.stopChargeSound();
+    sound.stopAirborne();
     sound.gameOver();
     sound.stopBGM();
 
